@@ -36,9 +36,29 @@ cd proteomics-dashboard
 # Install dependencies
 pip install -r requirements.txt
 
-# Run app
+# Run app (deployment version - no R required)
 streamlit run deploy_app.py
 ```
+
+## 📦 Streamlit Cloud Deployment
+
+1. **Create GitHub Repository**:
+   ```bash
+   git remote add origin https://github.com/yourusername/proteomics-dashboard.git
+   git push -u origin main
+   ```
+
+2. **Deploy on Streamlit Cloud**:
+   - Visit [share.streamlit.io](https://share.streamlit.io)
+   - Connect your GitHub account  
+   - Select your repository
+   - Set main file to: `deploy_app.py`
+   - Click Deploy!
+
+3. **Alternative**: Use the helper script:
+   ```bash
+   ./deploy.sh
+   ```
 
 ## 📈 Analysis Methods
 
