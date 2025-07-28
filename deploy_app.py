@@ -231,12 +231,17 @@ class ProteomicsResultsViewer:
         if 'delta_NPX' in full_results.columns:
             display_columns.append('delta_NPX')
         
-        # Add significance column for display
-        full_results['Significant'] = full_results['dynamic_sig'].map({True: '✅ Yes', False: '❌ No'})
-        display_columns = ['Significant'] + display_columns
+        # Function to highlight significant rows
+        def highlight_significant_rows(row):
+            if row['dynamic_sig']:
+                return ['background-color: #ffeb3b; font-weight: bold'] * len(row)
+            else:
+                return [''] * len(row)
         
+        # Apply styling and display
+        styled_df = full_results[display_columns].style.apply(highlight_significant_rows, axis=1)
         st.dataframe(
-            full_results[display_columns],
+            styled_df,
             use_container_width=True,
             height=400
         )
@@ -284,15 +289,21 @@ class ProteomicsResultsViewer:
                     
                     # Dot plot of top terms using the utility function
                     if len(enrichment_data) > 0:
-                        if plot_generator:
-                            # Use the plotting utility function
-                            enrich_plot = plot_generator.create_enrichment_dotplot(
-                                enrichment_data, f"- {ont_name}"
-                            )
-                            if enrich_plot:
-                                st.plotly_chart(enrich_plot, use_container_width=True)
-                        else:
-                            # Fallback dot plot
+                        try:
+                            if plot_generator:
+                                # Use the plotting utility function
+                                enrich_plot = plot_generator.create_enrichment_dotplot(
+                                    enrichment_data, f"- {ont_name}"
+                                )
+                                if enrich_plot:
+                                    st.plotly_chart(enrich_plot, use_container_width=True)
+                                else:
+                                    raise Exception("Plot generation failed")
+                            else:
+                                raise Exception("No plot generator available")
+                        except Exception as e:
+                            # Fallback dot plot implementation
+                            st.warning(f"Using fallback plot due to: {str(e)[:100]}...")
                             top_terms = enrichment_data.head(15)
                             
                             # Prepare data for dot plot
@@ -301,7 +312,7 @@ class ProteomicsResultsViewer:
                             
                             # Use p-value for color if available, otherwise use enrichment score
                             if 'pvalue' in top_terms.columns:
-                                color_values = -np.log10(top_terms['pvalue'])  # Convert to -log10 for better visualization
+                                color_values = -np.log10(top_terms['pvalue'] + 1e-10)  # Add small value to avoid log(0)
                                 color_label = '-Log10(P-value)'
                                 color_scale = 'Viridis'
                             else:
