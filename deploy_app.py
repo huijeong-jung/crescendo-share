@@ -18,10 +18,36 @@ try:
     plot_generator = PlotGenerator()
     
     def create_volcano_plot(data, analysis_name="Analysis", p_threshold=0.05, logfc_threshold=1.0):
-        return plot_generator.create_volcano_plot(data, f"({analysis_name})", p_threshold, logfc_threshold)
+        """Enhanced wrapper with error handling"""
+        if data.empty:
+            return None
+        # Check if required columns exist
+        required_cols = ['logFC', 'P.Value', 'sig', 'neg_log10_p', 'Assay']
+        missing_cols = [col for col in required_cols if col not in data.columns]
+        if missing_cols:
+            print(f"Warning: Missing columns {missing_cols} for volcano plot")
+            return None
+        try:
+            return plot_generator.create_volcano_plot(data, f"({analysis_name})", p_threshold, logfc_threshold)
+        except Exception as e:
+            print(f"Error creating volcano plot: {e}")
+            return None
     
     def create_enrichment_dotplot(data, title_suffix="", max_terms=20):
-        return plot_generator.create_enrichment_dotplot(data, title_suffix, max_terms)
+        """Enhanced wrapper with error handling"""
+        # Check if required columns exist
+        required_cols = ['NES', 'p.adjust', 'setSize', 'Description']
+        missing_cols = [col for col in required_cols if col not in data.columns]
+        if missing_cols:
+            print(f"Warning: Missing columns {missing_cols} for enrichment plot")
+            return None
+        if data.empty:
+            return None
+        try:
+            return plot_generator.create_enrichment_dotplot(data, title_suffix, max_terms)
+        except Exception as e:
+            print(f"Error creating enrichment plot: {e}")
+            return None
         
 except ImportError:
     # Fallback: define the functions inline if import fails
@@ -122,34 +148,77 @@ except ImportError:
         if data.empty:
             return None
             
-        # Sort by NES and take top terms
-        df_plot = data.sort_values('NES', ascending=True).tail(max_terms)
+        # Check if required columns exist
+        required_cols = ['NES', 'p.adjust', 'setSize', 'Description']
+        missing_cols = [col for col in required_cols if col not in data.columns]
+        if missing_cols:
+            print(f"Warning: Missing columns {missing_cols} for enrichment plot")
+            return None
+            
+        # Sort by NES and take top terms - handle potential sorting issues
+        try:
+            df_plot = data.sort_values('NES', ascending=True).tail(max_terms)
+        except Exception as e:
+            print(f"Error sorting data: {e}")
+            df_plot = data.head(max_terms)  # Fallback to first N terms
+        
+        # Ensure no NaN values
+        df_plot = df_plot.dropna(subset=['NES', 'p.adjust', 'setSize'])
+        
+        if df_plot.empty:
+            return None
         
         fig = go.Figure()
         
-        # Create scatter plot
-        fig.add_trace(go.Scatter(
-            x=df_plot['NES'],
-            y=list(range(len(df_plot))),
-            mode='markers',
-            marker=dict(
-                size=np.sqrt(df_plot['setSize']) * 2,  # Size by gene set size
-                color=-np.log10(df_plot['p.adjust']),
-                colorscale='Viridis',
-                showscale=True,
-                colorbar=dict(
-                    title="-log10(adj p-value)",
-                    titleside="right"
+        # Create scatter plot with safer colorbar configuration
+        try:
+            # Ensure p.adjust values are valid and > 0
+            p_adjust_vals = df_plot['p.adjust'].clip(lower=1e-10)  # Prevent log(0)
+            color_vals = [-np.log10(p) for p in p_adjust_vals]
+            
+            fig.add_trace(go.Scatter(
+                x=df_plot['NES'],
+                y=list(range(len(df_plot))),
+                mode='markers',
+                marker=dict(
+                    size=[max(8, min(20, np.sqrt(s) * 2)) for s in df_plot['setSize']],  # Size by gene set size with bounds
+                    color=color_vals,
+                    colorscale='Viridis',
+                    showscale=True,
+                    colorbar=dict(
+                        title=dict(text="-log10(adj p-value)", side="right"),
+                        x=1.02
+                    ),
+                    line=dict(width=1, color='white')
                 ),
-                line=dict(width=1, color='white')
-            ),
-            text=df_plot['Description'],
-            customdata=df_plot[['p.adjust', 'setSize', 'NES']],
-            hovertemplate='<b>%{text}</b><br>' +
-                         'NES: %{customdata[2]:.3f}<br>' +
-                         'Set Size: %{customdata[1]}<br>' +
-                         'Adj p-value: %{customdata[0]:.2e}<extra></extra>'
-        ))
+                text=df_plot['Description'],
+                customdata=df_plot[['p.adjust', 'setSize', 'NES']].values,
+                hovertemplate='<b>%{text}</b><br>' +
+                             'NES: %{customdata[2]:.3f}<br>' +
+                             'Set Size: %{customdata[1]}<br>' +
+                             'Adj p-value: %{customdata[0]:.2e}<extra></extra>',
+                showlegend=False
+            ))
+        except Exception as e:
+            print(f"Colorbar plot failed: {e}")
+            # Fallback to simpler plot if colorbar fails
+            fig.add_trace(go.Scatter(
+                x=df_plot['NES'],
+                y=list(range(len(df_plot))),
+                mode='markers',
+                marker=dict(
+                    size=[max(8, min(20, np.sqrt(s) * 2)) for s in df_plot['setSize']],
+                    color='blue',
+                    line=dict(width=1, color='white')
+                ),
+                text=df_plot['Description'],
+                customdata=df_plot[['p.adjust', 'setSize', 'NES']].values,
+                hovertemplate='<b>%{text}</b><br>' +
+                             'NES: %{customdata[2]:.3f}<br>' +
+                             'Set Size: %{customdata[1]}<br>' +
+                             'Adj p-value: %{customdata[0]:.2e}<extra></extra>',
+                showlegend=False
+            ))
         
         # Update layout
         fig.update_layout(
@@ -277,13 +346,19 @@ class ProteomicsResultsViewer:
         st.info(f"Using thresholds: P-value < {dynamic_p_threshold}, |logFC| > {dynamic_logfc_threshold}")
         
         # Volcano plot with dynamic thresholds
-        volcano_plot = create_volcano_plot(
-            limma_data_dynamic, 
-            analysis_name=f"({analysis_name})",
-            p_threshold=dynamic_p_threshold,
-            logfc_threshold=dynamic_logfc_threshold
-        )
-        st.plotly_chart(volcano_plot, use_container_width=True)
+        try:
+            volcano_plot = create_volcano_plot(
+                limma_data_dynamic, 
+                analysis_name=f"({analysis_name})",
+                p_threshold=dynamic_p_threshold,
+                logfc_threshold=dynamic_logfc_threshold
+            )
+            if volcano_plot:
+                st.plotly_chart(volcano_plot, use_container_width=True)
+            else:
+                st.warning("Could not create volcano plot - please check data format")
+        except Exception as e:
+            st.error(f"Error creating volcano plot: {str(e)}")
         
         # All proteins table (ordered by logFC, with significant ones highlighted)
         st.markdown("#### 📋 All Proteins (Ordered by LogFC)")
@@ -400,12 +475,27 @@ class ProteomicsResultsViewer:
                             st.metric("Min Adj P-val", f"{min_padj:.2e}")
                     
                     # Enrichment dot plot
-                    if 'create_enrichment_dotplot' in globals():
+                    try:
                         enrich_plot = create_enrichment_dotplot(
                             ont_data, f"- {ont_name} ({analysis_name})"
                         )
                         if enrich_plot:
                             st.plotly_chart(enrich_plot, use_container_width=True)
+                    except Exception as e:
+                        st.warning(f"Could not create enrichment plot for {ont_name}: {str(e)}")
+                        # Fallback to simple bar chart
+                        if len(ont_data) > 0:
+                            top_terms = ont_data.head(15)
+                            fig = px.bar(
+                                top_terms,
+                                x='NES' if 'NES' in top_terms.columns else 'enrichmentScore',
+                                y='Description',
+                                orientation='h',
+                                title=f"Top {ont_name} Terms",
+                                labels={'x': 'Enrichment Score', 'y': 'Pathway/Term'}
+                            )
+                            fig.update_layout(height=500)
+                            st.plotly_chart(fig, use_container_width=True)
                     
                     # Results table
                     st.markdown(f"#### 📋 {ont_name} Terms")
