@@ -7,9 +7,69 @@ from pathlib import Path
 import sys
 import os
 
-# Add utils to path for imports
-sys.path.append('.')
-from utils.plotting import create_volcano_plot
+# Handle imports more robustly for deployment
+try:
+    # Add current directory to path
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, current_dir)
+    
+    from utils.plotting import PlotGenerator
+    plot_generator = PlotGenerator()
+    
+    def create_volcano_plot(data, p_threshold=0.05, logfc_threshold=1.0, analysis_name="Analysis"):
+        return plot_generator.create_volcano_plot(data, f"({analysis_name})", p_threshold, logfc_threshold)
+        
+except ImportError:
+    # Fallback: define the function inline if import fails
+    import numpy as np
+    
+    def create_volcano_plot(data, p_threshold=0.05, logfc_threshold=1.0, analysis_name="Analysis"):
+        """Fallback volcano plot function"""
+        import plotly.graph_objects as go
+        
+        # Calculate significance
+        data = data.copy()
+        data['significant'] = (
+            (data['P.Value'] < p_threshold) & 
+            (abs(data['logFC']) > logfc_threshold)
+        )
+        
+        # Create colors
+        data['color'] = data['significant'].map({True: 'red', False: 'lightgray'})
+        
+        # Create plot
+        fig = go.Figure()
+        
+        # Add points
+        fig.add_trace(go.Scatter(
+            x=data['logFC'],
+            y=-np.log10(data['P.Value']),
+            mode='markers',
+            marker=dict(color=data['color'], size=6, opacity=0.7),
+            text=data['Assay'],
+            hovertemplate='<b>%{text}</b><br>logFC: %{x:.3f}<br>-log10(P): %{y:.3f}<extra></extra>',
+            showlegend=False
+        ))
+        
+        # Add threshold lines
+        fig.add_hline(y=-np.log10(p_threshold), 
+                     line_dash="dash", line_color="blue", opacity=0.7)
+        fig.add_vline(x=logfc_threshold, 
+                     line_dash="dash", line_color="blue", opacity=0.7)
+        fig.add_vline(x=-logfc_threshold, 
+                     line_dash="dash", line_color="blue", opacity=0.7)
+        
+        # Update layout
+        fig.update_layout(
+            title=f"Volcano Plot - {analysis_name}",
+            xaxis_title="Log2 Fold Change",
+            yaxis_title="-Log10(P-value)",
+            template="plotly_white",
+            width=800,
+            height=600
+        )
+        
+        return fig
 
 st.set_page_config(
     page_title="Proteomics Analysis Results",
