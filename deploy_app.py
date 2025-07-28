@@ -619,6 +619,184 @@ class ProteomicsResultsViewer:
                         key=f"download_{ont_key}_{analysis_name}"
                     )
     
+    def create_summary_barplot(self, summary_data):
+        """Create summary bar plot across analyses - fallback implementation"""
+        import plotly.graph_objects as go
+        
+        if not summary_data:
+            return None
+            
+        fig = go.Figure()
+        
+        categories = ['Total Proteins', 'Significant', 'Upregulated', 'Downregulated']
+        
+        for i, analysis in enumerate(summary_data):
+            fig.add_trace(go.Bar(
+                name=analysis['name'],
+                x=categories,
+                y=[
+                    analysis.get('total_proteins', 0),
+                    analysis.get('significant_proteins', 0), 
+                    analysis.get('upregulated', 0),
+                    analysis.get('downregulated', 0)
+                ],
+                text=[
+                    analysis.get('total_proteins', 0),
+                    analysis.get('significant_proteins', 0),
+                    analysis.get('upregulated', 0), 
+                    analysis.get('downregulated', 0)
+                ],
+                textposition='auto'
+            ))
+        
+        fig.update_layout(
+            title="Analysis Summary Across Groups",
+            xaxis_title="Protein Categories",
+            yaxis_title="Count",
+            barmode='group',
+            template="plotly_white",
+            height=500
+        )
+        
+        return fig
+    
+    def display_comparative_analysis(self):
+        """Display comparative analysis across all available groups"""
+        st.markdown("## 🔍 Comparative Analysis")
+        
+        # Load all available analyses
+        all_analyses_data = {}
+        
+        for analysis_name, analysis_key in self.available_analyses.items():
+            limma_data = self.load_limma_results(analysis_key)
+            if limma_data is not None:
+                # Apply same significance logic as in display_limma_results
+                limma_data_dynamic = limma_data.copy()
+                limma_data_dynamic['adj.P.Val'] = pd.to_numeric(limma_data_dynamic['adj.P.Val'], errors='coerce')
+                limma_data_dynamic['logFC'] = pd.to_numeric(limma_data_dynamic['logFC'], errors='coerce')
+                limma_data_dynamic['P.Value'] = pd.to_numeric(limma_data_dynamic['P.Value'], errors='coerce')
+                
+                # Use default thresholds for comparative analysis
+                p_threshold = 0.05
+                logfc_threshold = 1.0
+                limma_data_dynamic['sig'] = 'Not significant'
+                significant_mask = (
+                    (limma_data_dynamic['P.Value'] < p_threshold) & 
+                    (abs(limma_data_dynamic['logFC']) > logfc_threshold)
+                )
+                limma_data_dynamic.loc[significant_mask, 'sig'] = 'Significant'
+                
+                all_analyses_data[analysis_key] = {
+                    'name': analysis_name,
+                    'limma_data': limma_data_dynamic
+                }
+        
+        if not all_analyses_data:
+            st.info("No analysis results available for comparison. Please ensure you have limma results for multiple analyses.")
+            return
+        
+        # Collect summary data
+        summary_data = []
+        for analysis_key, data in all_analyses_data.items():
+            limma_data = data['limma_data']
+            total = len(limma_data)
+            significant = len(limma_data[limma_data['sig'] == 'Significant'])
+            upregulated = len(limma_data[(limma_data['sig'] == 'Significant') & (limma_data['logFC'] > 0)])
+            downregulated = len(limma_data[(limma_data['sig'] == 'Significant') & (limma_data['logFC'] < 0)])
+            
+            summary_data.append({
+                'name': data['name'],
+                'total_proteins': total,
+                'significant_proteins': significant,
+                'upregulated': upregulated,
+                'downregulated': downregulated
+            })
+        
+        if summary_data:
+            # Summary bar plot
+            try:
+                summary_plot = self.create_summary_barplot(summary_data)
+                    
+                if summary_plot:
+                    st.plotly_chart(summary_plot, use_container_width=True)
+            except Exception as e:
+                st.warning(f"Could not create summary plot: {str(e)}")
+                
+            # Summary table
+            st.markdown("### 📊 Summary Statistics")
+            summary_df = pd.DataFrame(summary_data)
+            summary_df['% Significant'] = (summary_df['significant_proteins'] / summary_df['total_proteins'] * 100).round(1)
+            st.dataframe(summary_df, use_container_width=True)
+            
+            # Download summary
+            csv_summary = summary_df.to_csv(index=False)
+            st.download_button(
+                "📥 Download Summary Statistics",
+                data=csv_summary,
+                file_name="comparative_analysis_summary.csv",
+                mime="text/csv"
+            )
+            
+            # Common proteins across analyses
+            self.display_common_proteins(all_analyses_data)
+        else:
+            st.info("No data available for comparative analysis.")
+    
+    def display_common_proteins(self, all_analyses_data):
+        """Display proteins that are significant across multiple analyses"""
+        st.markdown("### 🎯 Common Significant Proteins")
+        
+        # Collect significant proteins from all analyses
+        all_significant = {}
+        
+        for analysis_key, data in all_analyses_data.items():
+            limma_data = data['limma_data']
+            significant = limma_data[limma_data['sig'] == 'Significant']
+            
+            for _, protein in significant.iterrows():
+                protein_name = protein['Assay']
+                if protein_name not in all_significant:
+                    all_significant[protein_name] = []
+                
+                all_significant[protein_name].append({
+                    'analysis': data['name'],
+                    'logFC': protein['logFC'],
+                    'p_value': protein['P.Value'],
+                    'adj_p_value': protein['adj.P.Val']
+                })
+        
+        # Find proteins significant in multiple analyses
+        multi_significant = {k: v for k, v in all_significant.items() if len(v) > 1}
+        
+        if multi_significant:
+            st.markdown(f"Found {len(multi_significant)} proteins significant in multiple analyses:")
+            
+            # Create comparison table
+            comparison_data = []
+            for protein, analyses in multi_significant.items():
+                for analysis_data in analyses:
+                    comparison_data.append({
+                        'Protein': protein,
+                        'Analysis': analysis_data['analysis'],
+                        'logFC': analysis_data['logFC'],
+                        'P-value': analysis_data['p_value'],
+                        'Adj P-value': analysis_data['adj_p_value']
+                    })
+            
+            comparison_df = pd.DataFrame(comparison_data)
+            st.dataframe(comparison_df, use_container_width=True, height=400)
+            
+            # Download button
+            csv = comparison_df.to_csv(index=False)
+            st.download_button(
+                "📥 Download Common Proteins",
+                data=csv,
+                file_name="common_significant_proteins.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("No proteins were found to be significant across multiple analyses.")
+    
     def run(self):
         """Main app interface"""
         st.title("🧬 Proteomics Analysis Results Dashboard")
@@ -641,31 +819,25 @@ class ProteomicsResultsViewer:
             )
             
             analysis_key = self.available_analyses[selected_analysis]
-            
-            st.markdown("---")
-            st.markdown("### 📁 Available Results")
-            
-            # Check what results are available
-            limma_available = (self.limma_dir / f"limma_results_{analysis_key}.csv").exists()
-            enrichment_available = any([
-                (self.enrichment_dir / f"enrichment_{ont}_{analysis_key}.csv").exists()
-                for ont in ['bp', 'mf', 'cc', 'kegg', 'reactome']
-            ])
-            
-            st.write(f"✅ Differential Expression" if limma_available else "❌ Differential Expression")
-            st.write(f"✅ Pathway Enrichment" if enrichment_available else "❌ Pathway Enrichment")
+
         
-        # Main content
-        analysis_key = self.available_analyses[selected_analysis]
+        # Main content - Create tabs for individual analysis and comparative analysis
+        main_tab, comparative_tab = st.tabs(["📊 Individual Analysis", "🔍 Comparative Analysis"])
         
-        # Load and display limma results
-        limma_data = self.load_limma_results(analysis_key)
-        if limma_data is not None:
-            self.display_limma_results(selected_analysis, limma_data)
-            st.markdown("---")
+        with main_tab:
+            analysis_key = self.available_analyses[selected_analysis]
             
-        # Display enrichment results
-        self.display_enrichment_results(selected_analysis, analysis_key)
+            # Load and display limma results
+            limma_data = self.load_limma_results(analysis_key)
+            if limma_data is not None:
+                self.display_limma_results(selected_analysis, limma_data)
+                st.markdown("---")
+                
+            # Display enrichment results
+            self.display_enrichment_results(selected_analysis, analysis_key)
+        
+        with comparative_tab:
+            self.display_comparative_analysis()
 
 # Run the app
 if __name__ == "__main__":
