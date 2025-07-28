@@ -1,0 +1,2 @@
+"ID","Description","setSize","enrichmentScore","NES","pvalue","p.adjust","qvalue","rank","leading_edge","core_enrichment","analysis_group"
+"GO:0180051","translation factor activity",25,-0.696307444059316,-2.07095555883073,3.77949984022335e-05,0.0257005989135188,0.0247457779012518,953,"tags=60%, list=18%, signal=50%","O43432/O60573/O43583/P20042/P47813/Q9H2K0/Q15056/O76050/Q9UI10/P41214/Q04637/P23588/Q9Y450/P55010/P06730","large_artery_atherosclerosis"

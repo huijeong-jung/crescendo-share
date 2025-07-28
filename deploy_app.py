@@ -1,0 +1,284 @@
+# deploy_app.py - Streamlit Cloud deployment version
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from pathlib import Path
+import sys
+import os
+
+# Add utils to path for imports
+sys.path.append('.')
+from utils.plotting import create_volcano_plot
+
+st.set_page_config(
+    page_title="Proteomics Analysis Results",
+    page_icon="🧬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+class ProteomicsResultsViewer:
+    """Read-only viewer for pre-computed proteomics results"""
+    
+    def __init__(self):
+        self.results_dir = Path("results")
+        self.limma_dir = self.results_dir / "limma_results"
+        self.enrichment_dir = self.results_dir / "enrichment_results"
+        
+        # Available analyses
+        self.available_analyses = {
+            "All Groups (Holistic)": "all_groups_holistic",
+            "Cardioembolism": "cardioembolism", 
+            "Large Artery Atherosclerosis": "large_artery_atherosclerosis",
+            "Small Vessel Occlusion": "small_vessel_occlusion",
+            "Stroke of Other Etiology": "stroke_of_other_etiology",
+            "Stroke of Undetermined Etiology": "stroke_of_undetermined_etiology"
+        }
+    
+    def load_limma_results(self, analysis_key):
+        """Load limma results for a specific analysis"""
+        limma_file = self.limma_dir / f"limma_results_{analysis_key}.csv"
+        if limma_file.exists():
+            return pd.read_csv(limma_file)
+        return None
+    
+    def load_enrichment_results(self, analysis_key, ontology):
+        """Load enrichment results for a specific analysis and ontology"""
+        enrichment_file = self.enrichment_dir / f"enrichment_{ontology}_{analysis_key}.csv"
+        if enrichment_file.exists():
+            return pd.read_csv(enrichment_file)
+        return None
+    
+    def display_limma_results(self, analysis_name, limma_data, p_value_threshold=0.05, logfc_threshold=1.0):
+        """Display limma analysis results with dynamic thresholds"""
+        if limma_data is None or limma_data.empty:
+            st.warning("No limma results available")
+            return
+        
+        st.markdown(f"### 📈 Differential Expression Results - {analysis_name}")
+        
+        # Interactive threshold controls
+        st.markdown("#### 🎯 Interactive Significance Thresholds")
+        col_p, col_lfc = st.columns(2)
+        
+        with col_p:
+            dynamic_p_threshold = st.number_input(
+                "P-value threshold (raw):",
+                min_value=0.001, max_value=0.1, value=p_value_threshold, step=0.005,
+                format="%.3f",
+                help="Raw p-value cutoff (not adjusted) - adjust and see results update instantly",
+                key=f"p_thresh_{analysis_name}"
+            )
+        
+        with col_lfc:
+            dynamic_logfc_threshold = st.number_input(
+                "LogFC threshold:",
+                min_value=0.0, max_value=3.0, value=logfc_threshold, step=0.1,
+                help="Adjust log fold-change cutoff and see results update instantly",
+                key=f"lfc_thresh_{analysis_name}"
+            )
+        
+        # Apply dynamic filtering
+        limma_data_filtered = limma_data.copy()
+        limma_data_filtered['dynamic_sig'] = (
+            (limma_data_filtered['P.Value'] < dynamic_p_threshold) & 
+            (limma_data_filtered['logFC'].abs() > dynamic_logfc_threshold)
+        )
+        
+        # Summary statistics
+        total_proteins = len(limma_data_filtered)
+        significant_proteins = len(limma_data_filtered[limma_data_filtered['dynamic_sig']])
+        upregulated = len(limma_data_filtered[
+            (limma_data_filtered['dynamic_sig']) & (limma_data_filtered['logFC'] > 0)
+        ])
+        downregulated = len(limma_data_filtered[
+            (limma_data_filtered['dynamic_sig']) & (limma_data_filtered['logFC'] < 0)
+        ])
+        
+        # Display summary
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Total Proteins", total_proteins)
+        with col2:
+            st.metric("Significant", significant_proteins)
+        with col3:
+            st.metric("Upregulated", upregulated)
+        with col4:
+            st.metric("Downregulated", downregulated)
+        
+        # Volcano plot
+        st.markdown("#### 🌋 Volcano Plot")
+        if 'create_volcano_plot' in globals():
+            volcano_fig = create_volcano_plot(
+                limma_data_filtered, 
+                p_threshold=dynamic_p_threshold,
+                logfc_threshold=dynamic_logfc_threshold
+            )
+            st.plotly_chart(volcano_fig, use_container_width=True)
+        else:
+            # Fallback volcano plot
+            fig = px.scatter(
+                limma_data_filtered,
+                x='logFC',
+                y='neg_log10_p',
+                color='dynamic_sig',
+                hover_data=['Assay', 'P.Value'],
+                title="Volcano Plot",
+                labels={'logFC': 'Log2 Fold Change', 'neg_log10_p': '-Log10(P-value)'}
+            )
+            fig.add_hline(y=-np.log10(dynamic_p_threshold), line_dash="dash", line_color="red")
+            fig.add_vline(x=dynamic_logfc_threshold, line_dash="dash", line_color="red")
+            fig.add_vline(x=-dynamic_logfc_threshold, line_dash="dash", line_color="red")
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Results table
+        st.markdown("#### 📊 Significant Proteins")
+        significant_results = limma_data_filtered[limma_data_filtered['dynamic_sig']].sort_values('P.Value')
+        
+        if not significant_results.empty:
+            display_columns = ['Assay', 'logFC', 'P.Value', 'adj.P.Val', 'UniProt']
+            if 'delta_NPX' in significant_results.columns:
+                display_columns.append('delta_NPX')
+                
+            st.dataframe(
+                significant_results[display_columns].head(50),
+                use_container_width=True
+            )
+            
+            # Download button
+            csv = significant_results.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Significant Results (CSV)",
+                data=csv,
+                file_name=f"significant_proteins_{analysis_name.lower().replace(' ', '_')}.csv",
+                mime='text/csv'
+            )
+        else:
+            st.info("No proteins meet the current significance criteria.")
+    
+    def display_enrichment_results(self, analysis_name, analysis_key):
+        """Display enrichment analysis results"""
+        st.markdown(f"### 🧬 Pathway Enrichment Results - {analysis_name}")
+        
+        # Create tabs for different ontologies
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "GO: Biological Process", 
+            "GO: Molecular Function", 
+            "GO: Cellular Component",
+            "KEGG Pathways",
+            "REACTOME Pathways"
+        ])
+        
+        ontologies = {
+            "GO: Biological Process": ("bp", tab1),
+            "GO: Molecular Function": ("mf", tab2), 
+            "GO: Cellular Component": ("cc", tab3),
+            "KEGG Pathways": ("kegg", tab4),
+            "REACTOME Pathways": ("reactome", tab5)
+        }
+        
+        for ont_name, (ont_key, tab) in ontologies.items():
+            with tab:
+                enrichment_data = self.load_enrichment_results(analysis_key, ont_key)
+                
+                if enrichment_data is not None and not enrichment_data.empty:
+                    st.markdown(f"#### {ont_name} Results")
+                    
+                    # Display summary
+                    st.metric("Enriched Terms", len(enrichment_data))
+                    
+                    # Bar plot of top terms
+                    if len(enrichment_data) > 0:
+                        top_terms = enrichment_data.head(15)
+                        
+                        fig = px.bar(
+                            top_terms,
+                            x='NES' if 'NES' in top_terms.columns else 'enrichmentScore',
+                            y='Description',
+                            orientation='h',
+                            title=f"Top {ont_name} Terms",
+                            labels={'x': 'Enrichment Score', 'y': 'Pathway/Term'},
+                            color='pvalue' if 'pvalue' in top_terms.columns else None,
+                            color_continuous_scale='Viridis_r'
+                        )
+                        fig.update_layout(height=500)
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    # Results table
+                    display_columns = ['Description', 'setSize', 'enrichmentScore']
+                    if 'NES' in enrichment_data.columns:
+                        display_columns.append('NES')
+                    if 'pvalue' in enrichment_data.columns:
+                        display_columns.extend(['pvalue', 'p.adjust'])
+                    
+                    st.dataframe(
+                        enrichment_data[display_columns].head(20),
+                        use_container_width=True
+                    )
+                    
+                    # Download button
+                    csv = enrichment_data.to_csv(index=False)
+                    st.download_button(
+                        label=f"📥 Download {ont_name} Results",
+                        data=csv,
+                        file_name=f"{ont_key}_enrichment_{analysis_key}.csv",
+                        mime='text/csv',
+                        key=f"download_{ont_key}_{analysis_key}"
+                    )
+                else:
+                    st.info(f"No {ont_name.lower()} enrichment results available.")
+    
+    def run(self):
+        """Main app interface"""
+        st.title("🧬 Proteomics Analysis Results Dashboard")
+        st.markdown("""
+        **Explore pre-computed differential expression and pathway enrichment results.**
+        
+        - 📊 **Interactive Thresholds**: Adjust significance criteria in real-time
+        - 🌋 **Volcano Plots**: Visualize differential expression
+        - 🧬 **Pathway Analysis**: GO, KEGG, and REACTOME enrichment results
+        - 📥 **Download Options**: Export filtered results
+        """)
+        
+        # Sidebar for analysis selection
+        with st.sidebar:
+            st.header("🎯 Analysis Selection")
+            selected_analysis = st.selectbox(
+                "Choose Analysis:",
+                list(self.available_analyses.keys()),
+                help="Select the stroke etiology group or holistic analysis"
+            )
+            
+            analysis_key = self.available_analyses[selected_analysis]
+            
+            st.markdown("---")
+            st.markdown("### 📁 Available Results")
+            
+            # Check what results are available
+            limma_available = (self.limma_dir / f"limma_results_{analysis_key}.csv").exists()
+            enrichment_available = any([
+                (self.enrichment_dir / f"enrichment_{ont}_{analysis_key}.csv").exists()
+                for ont in ['bp', 'mf', 'cc', 'kegg', 'reactome']
+            ])
+            
+            st.write(f"✅ Differential Expression" if limma_available else "❌ Differential Expression")
+            st.write(f"✅ Pathway Enrichment" if enrichment_available else "❌ Pathway Enrichment")
+        
+        # Main content
+        analysis_key = self.available_analyses[selected_analysis]
+        
+        # Load and display limma results
+        limma_data = self.load_limma_results(analysis_key)
+        if limma_data is not None:
+            self.display_limma_results(selected_analysis, limma_data)
+            st.markdown("---")
+            
+        # Display enrichment results
+        self.display_enrichment_results(selected_analysis, analysis_key)
+
+# Run the app
+if __name__ == "__main__":
+    import numpy as np  # Import here to avoid issues
+    viewer = ProteomicsResultsViewer()
+    viewer.run()

@@ -1,0 +1,2 @@
+"ID","Description","setSize","enrichmentScore","NES","pvalue","p.adjust","qvalue","rank","leading_edge","core_enrichment","analysis_group"
+"hsa04081","Hormone signaling",64,-0.488944249727134,-2.04971456719012,3.85528258786105e-05,0.0112959779824329,0.0104295539482136,456,"tags=28%, list=8%, signal=26%","P01210/P01241/P16066/P23582/O95622/P43220/P01222/P12931/P32745/P01229/P01236/O60896/P01270/P06307/P01308/P01350/P34998/P16860","all_groups_holistic"

@@ -1,0 +1,2 @@
+"ID","Description","setSize","enrichmentScore","NES","pvalue","p.adjust","qvalue","rank","leading_edge","core_enrichment","analysis_group"
+"R-HSA-9925561","Developmental Lineage of Pancreatic Acinar Cells",18,-0.772674460138445,-2.05231453220827,5.17471856804839e-05,0.0435711303429675,0.0423782215362279,509,"tags=61%, list=10%, signal=55%","6690/1358/1357/168620/1360/2813/5406/1506/11330/3816/5408","stroke_of_undetermined_etiology"
