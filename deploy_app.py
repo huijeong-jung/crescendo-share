@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from pathlib import Path
 import sys
 import os
+import numpy as np
 
 # Handle imports more robustly for deployment
 try:
@@ -18,10 +19,14 @@ try:
     
     def create_volcano_plot(data, p_threshold=0.05, logfc_threshold=1.0, analysis_name="Analysis"):
         return plot_generator.create_volcano_plot(data, f"({analysis_name})", p_threshold, logfc_threshold)
+    
+    # Make plot_generator globally accessible    
+    globals()['plot_generator'] = plot_generator
         
 except ImportError:
     # Fallback: define the function inline if import fails
     import numpy as np
+    plot_generator = None  # No plot generator available
     
     def create_volcano_plot(data, p_threshold=0.05, logfc_threshold=1.0, analysis_name="Analysis"):
         """Fallback volcano plot function"""
@@ -206,7 +211,7 @@ class ProteomicsResultsViewer:
                 use_container_width=True
             )
             
-            # Download button
+            # Download button for significant results
             csv = significant_results.to_csv(index=False)
             st.download_button(
                 label="📥 Download Significant Results (CSV)",
@@ -216,6 +221,35 @@ class ProteomicsResultsViewer:
             )
         else:
             st.info("No proteins meet the current significance criteria.")
+        
+        # Full protein list with highlighting
+        st.markdown("#### 📋 All Proteins (Significant Highlighted)")
+        
+        # Prepare display data with highlighting
+        full_results = limma_data_filtered.copy().sort_values('P.Value')
+        display_columns = ['Assay', 'logFC', 'P.Value', 'adj.P.Val', 'UniProt']
+        if 'delta_NPX' in full_results.columns:
+            display_columns.append('delta_NPX')
+        
+        # Add significance column for display
+        full_results['Significant'] = full_results['dynamic_sig'].map({True: '✅ Yes', False: '❌ No'})
+        display_columns = ['Significant'] + display_columns
+        
+        st.dataframe(
+            full_results[display_columns],
+            use_container_width=True,
+            height=400
+        )
+        
+        # Download button for all results
+        csv_all = full_results.to_csv(index=False)
+        st.download_button(
+            label="📥 Download All Results (CSV)",
+            data=csv_all,
+            file_name=f"all_proteins_{analysis_name.lower().replace(' ', '_')}.csv",
+            mime='text/csv',
+            key=f"download_all_{analysis_name}"
+        )
     
     def display_enrichment_results(self, analysis_name, analysis_key):
         """Display enrichment analysis results"""
@@ -248,22 +282,69 @@ class ProteomicsResultsViewer:
                     # Display summary
                     st.metric("Enriched Terms", len(enrichment_data))
                     
-                    # Bar plot of top terms
+                    # Dot plot of top terms using the utility function
                     if len(enrichment_data) > 0:
-                        top_terms = enrichment_data.head(15)
-                        
-                        fig = px.bar(
-                            top_terms,
-                            x='NES' if 'NES' in top_terms.columns else 'enrichmentScore',
-                            y='Description',
-                            orientation='h',
-                            title=f"Top {ont_name} Terms",
-                            labels={'x': 'Enrichment Score', 'y': 'Pathway/Term'},
-                            color='pvalue' if 'pvalue' in top_terms.columns else None,
-                            color_continuous_scale='Viridis_r'
-                        )
-                        fig.update_layout(height=500)
-                        st.plotly_chart(fig, use_container_width=True)
+                        if plot_generator:
+                            # Use the plotting utility function
+                            enrich_plot = plot_generator.create_enrichment_dotplot(
+                                enrichment_data, f"- {ont_name}"
+                            )
+                            if enrich_plot:
+                                st.plotly_chart(enrich_plot, use_container_width=True)
+                        else:
+                            # Fallback dot plot
+                            top_terms = enrichment_data.head(15)
+                            
+                            # Prepare data for dot plot
+                            y_values = top_terms['Description']
+                            x_values = top_terms['NES'] if 'NES' in top_terms.columns else top_terms['enrichmentScore']
+                            
+                            # Use p-value for color if available, otherwise use enrichment score
+                            if 'pvalue' in top_terms.columns:
+                                color_values = -np.log10(top_terms['pvalue'])  # Convert to -log10 for better visualization
+                                color_label = '-Log10(P-value)'
+                                color_scale = 'Viridis'
+                            else:
+                                color_values = x_values
+                                color_label = 'Enrichment Score'
+                                color_scale = 'Viridis'
+                            
+                            # Use gene ratio or set size for dot size if available
+                            if 'setSize' in top_terms.columns:
+                                size_values = top_terms['setSize']
+                                size_label = 'Gene Set Size'
+                            else:
+                                size_values = [20] * len(top_terms)  # Default size
+                                size_label = None
+                            
+                            fig = px.scatter(
+                                x=x_values,
+                                y=y_values,
+                                color=color_values,
+                                size=size_values,
+                                title=f"Top {ont_name} Terms",
+                                labels={
+                                    'x': 'Normalized Enrichment Score' if 'NES' in top_terms.columns else 'Enrichment Score',
+                                    'y': 'Pathway/Term',
+                                    'color': color_label,
+                                    'size': size_label
+                                },
+                                color_continuous_scale=color_scale,
+                                size_max=15
+                            )
+                            
+                            # Customize layout
+                            fig.update_layout(
+                                height=500,
+                                yaxis={'categoryorder': 'total ascending'},  # Order by enrichment score
+                                showlegend=True
+                            )
+                            
+                            # Add vertical line at x=0 if using NES
+                            if 'NES' in top_terms.columns:
+                                fig.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.5)
+                            
+                            st.plotly_chart(fig, use_container_width=True)
                     
                     # Results table
                     display_columns = ['Description', 'setSize', 'enrichmentScore']
