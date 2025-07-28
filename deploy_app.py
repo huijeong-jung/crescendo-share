@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from pathlib import Path
 import sys
 import os
+import numpy as np
 
 # Handle imports more robustly for deployment
 try:
@@ -16,57 +17,154 @@ try:
     from utils.plotting import PlotGenerator
     plot_generator = PlotGenerator()
     
-    def create_volcano_plot(data, p_threshold=0.05, logfc_threshold=1.0, analysis_name="Analysis"):
+    def create_volcano_plot(data, analysis_name="Analysis", p_threshold=0.05, logfc_threshold=1.0):
         return plot_generator.create_volcano_plot(data, f"({analysis_name})", p_threshold, logfc_threshold)
+    
+    def create_enrichment_dotplot(data, title_suffix="", max_terms=20):
+        return plot_generator.create_enrichment_dotplot(data, title_suffix, max_terms)
         
 except ImportError:
-    # Fallback: define the function inline if import fails
+    # Fallback: define the functions inline if import fails
     import numpy as np
     
     def create_volcano_plot(data, p_threshold=0.05, logfc_threshold=1.0, analysis_name="Analysis"):
-        """Fallback volcano plot function"""
+        """Enhanced volcano plot function matching utils/plotting.py"""
         import plotly.graph_objects as go
+        import numpy as np
         
-        # Calculate significance
-        data = data.copy()
-        data['significant'] = (
-            (data['P.Value'] < p_threshold) & 
-            (abs(data['logFC']) > logfc_threshold)
-        )
-        
-        # Create colors
-        data['color'] = data['significant'].map({True: 'red', False: 'lightgray'})
-        
-        # Create plot
         fig = go.Figure()
         
-        # Add points
-        fig.add_trace(go.Scatter(
-            x=data['logFC'],
-            y=-np.log10(data['P.Value']),
-            mode='markers',
-            marker=dict(color=data['color'], size=6, opacity=0.7),
-            text=data['Assay'],
-            hovertemplate='<b>%{text}</b><br>logFC: %{x:.3f}<br>-log10(P): %{y:.3f}<extra></extra>',
-            showlegend=False
-        ))
+        # Color scheme
+        colors = {
+            'significant': '#FF6B6B',
+            'not_significant': '#A8A8A8'
+        }
         
-        # Add threshold lines
-        fig.add_hline(y=-np.log10(p_threshold), 
-                     line_dash="dash", line_color="blue", opacity=0.7)
-        fig.add_vline(x=logfc_threshold, 
-                     line_dash="dash", line_color="blue", opacity=0.7)
-        fig.add_vline(x=-logfc_threshold, 
-                     line_dash="dash", line_color="blue", opacity=0.7)
+        # Add non-significant points
+        non_sig = data[data['sig'] == 'Not significant']
+        if not non_sig.empty:
+            fig.add_trace(go.Scatter(
+                x=non_sig['logFC'],
+                y=non_sig['neg_log10_p'],
+                mode='markers',
+                marker=dict(
+                    color=colors['not_significant'], 
+                    size=4, 
+                    opacity=0.6,
+                    line=dict(width=0)
+                ),
+                name='Not significant',
+                text=non_sig['Assay'],
+                customdata=non_sig[['P.Value', 'adj.P.Val']],
+                hovertemplate='<b>%{text}</b><br>' +
+                             'logFC: %{x:.3f}<br>' +
+                             '-log10(p): %{y:.3f}<br>' +
+                             'p-value: %{customdata[0]:.2e}<br>' +
+                             'adj p-value: %{customdata[1]:.2e}<extra></extra>'
+            ))
+        
+        # Add significant points
+        sig = data[data['sig'] == 'Significant']
+        if not sig.empty:
+            fig.add_trace(go.Scatter(
+                x=sig['logFC'],
+                y=sig['neg_log10_p'],
+                mode='markers',
+                marker=dict(
+                    color=colors['significant'], 
+                    size=6, 
+                    opacity=0.8,
+                    line=dict(width=1, color='white')
+                ),
+                name='Significant',
+                text=sig['Assay'],
+                customdata=sig[['P.Value', 'adj.P.Val']],
+                hovertemplate='<b>%{text}</b><br>' +
+                             'logFC: %{x:.3f}<br>' +
+                             '-log10(p): %{y:.3f}<br>' +
+                             'p-value: %{customdata[0]:.2e}<br>' +
+                             'adj p-value: %{customdata[1]:.2e}<extra></extra>'
+            ))
+        
+        # Add dynamic threshold lines
+        fig.add_hline(y=-np.log10(p_threshold), line_dash="dash", line_color="blue", 
+                      annotation_text=f"p = {p_threshold}")
+        fig.add_vline(x=logfc_threshold, line_dash="dash", line_color="red", opacity=0.7,
+                      annotation_text=f"logFC = {logfc_threshold}")
+        fig.add_vline(x=-logfc_threshold, line_dash="dash", line_color="red", opacity=0.7,
+                      annotation_text=f"logFC = -{logfc_threshold}")
+        fig.add_vline(x=0, line_dash="dot", line_color="gray", opacity=0.5)
         
         # Update layout
         fig.update_layout(
-            title=f"Volcano Plot - {analysis_name}",
+            title=f"Volcano Plot: Recurrent vs Non-Recurrent {analysis_name}",
             xaxis_title="Log2 Fold Change",
-            yaxis_title="-Log10(P-value)",
+            yaxis_title="-Log10(p-value)",
             template="plotly_white",
             width=800,
-            height=600
+            height=600,
+            showlegend=True,
+            legend=dict(
+                yanchor="top",
+                y=0.99,
+                xanchor="left", 
+                x=0.01
+            )
+        )
+        
+        return fig
+
+    def create_enrichment_dotplot(data, title_suffix="", max_terms=20):
+        """Create enrichment dotplot matching utils/plotting.py"""
+        import plotly.graph_objects as go
+        import numpy as np
+        
+        if data.empty:
+            return None
+            
+        # Sort by NES and take top terms
+        df_plot = data.sort_values('NES', ascending=True).tail(max_terms)
+        
+        fig = go.Figure()
+        
+        # Create scatter plot
+        fig.add_trace(go.Scatter(
+            x=df_plot['NES'],
+            y=list(range(len(df_plot))),
+            mode='markers',
+            marker=dict(
+                size=np.sqrt(df_plot['setSize']) * 2,  # Size by gene set size
+                color=-np.log10(df_plot['p.adjust']),
+                colorscale='Viridis',
+                showscale=True,
+                colorbar=dict(
+                    title="-log10(adj p-value)",
+                    titleside="right"
+                ),
+                line=dict(width=1, color='white')
+            ),
+            text=df_plot['Description'],
+            customdata=df_plot[['p.adjust', 'setSize', 'NES']],
+            hovertemplate='<b>%{text}</b><br>' +
+                         'NES: %{customdata[2]:.3f}<br>' +
+                         'Set Size: %{customdata[1]}<br>' +
+                         'Adj p-value: %{customdata[0]:.2e}<extra></extra>'
+        ))
+        
+        # Update layout
+        fig.update_layout(
+            title=f"Gene Set Enrichment Analysis {title_suffix}",
+            xaxis_title="Normalized Enrichment Score (NES)",
+            yaxis=dict(
+                tickmode='array',
+                tickvals=list(range(len(df_plot))),
+                ticktext=[desc[:60] + '...' if len(desc) > 60 else desc 
+                         for desc in df_plot['Description']]
+            ),
+            template="plotly_white",
+            height=max(400, len(df_plot) * 30),
+            width=1000,
+            margin=dict(l=300)  # More space for labels
         )
         
         return fig
@@ -139,155 +237,215 @@ class ProteomicsResultsViewer:
                 key=f"lfc_thresh_{analysis_name}"
             )
         
-        # Apply dynamic filtering
-        limma_data_filtered = limma_data.copy()
-        limma_data_filtered['dynamic_sig'] = (
-            (limma_data_filtered['P.Value'] < dynamic_p_threshold) & 
-            (limma_data_filtered['logFC'].abs() > dynamic_logfc_threshold)
+        # Apply dynamic significance classification
+        limma_data_dynamic = limma_data.copy()
+        
+        # Ensure numeric columns are properly typed
+        limma_data_dynamic['adj.P.Val'] = pd.to_numeric(limma_data_dynamic['adj.P.Val'], errors='coerce')
+        limma_data_dynamic['logFC'] = pd.to_numeric(limma_data_dynamic['logFC'], errors='coerce')
+        limma_data_dynamic['P.Value'] = pd.to_numeric(limma_data_dynamic['P.Value'], errors='coerce')
+        
+        # Recalculate significance based on current thresholds
+        limma_data_dynamic['sig'] = 'Not significant'
+        significant_mask = (
+            (limma_data_dynamic['P.Value'] < dynamic_p_threshold) & 
+            (abs(limma_data_dynamic['logFC']) > dynamic_logfc_threshold)
         )
+        limma_data_dynamic.loc[significant_mask, 'sig'] = 'Significant'
         
-        # Summary statistics
-        total_proteins = len(limma_data_filtered)
-        significant_proteins = len(limma_data_filtered[limma_data_filtered['dynamic_sig']])
-        upregulated = len(limma_data_filtered[
-            (limma_data_filtered['dynamic_sig']) & (limma_data_filtered['logFC'] > 0)
-        ])
-        downregulated = len(limma_data_filtered[
-            (limma_data_filtered['dynamic_sig']) & (limma_data_filtered['logFC'] < 0)
-        ])
+        # Recalculate -log10(p-value) for plotting
+        limma_data_dynamic['neg_log10_p'] = -np.log10(limma_data_dynamic['P.Value'])
         
-        # Display summary
+        # Summary metrics with dynamic thresholds
         col1, col2, col3, col4 = st.columns(4)
+        
+        total_proteins = len(limma_data_dynamic)
+        significant = len(limma_data_dynamic[limma_data_dynamic['sig'] == 'Significant'])
+        upregulated = len(limma_data_dynamic[(limma_data_dynamic['sig'] == 'Significant') & (limma_data_dynamic['logFC'] > 0)])
+        downregulated = len(limma_data_dynamic[(limma_data_dynamic['sig'] == 'Significant') & (limma_data_dynamic['logFC'] < 0)])
+        
         with col1:
             st.metric("Total Proteins", total_proteins)
         with col2:
-            st.metric("Significant", significant_proteins)
+            st.metric("Significant", significant, f"{significant/total_proteins*100:.1f}%")
         with col3:
             st.metric("Upregulated", upregulated)
         with col4:
             st.metric("Downregulated", downregulated)
         
-        # Volcano plot
-        st.markdown("#### 🌋 Volcano Plot")
-        if 'create_volcano_plot' in globals():
-            volcano_fig = create_volcano_plot(
-                limma_data_filtered, 
-                p_threshold=dynamic_p_threshold,
-                logfc_threshold=dynamic_logfc_threshold
-            )
-            st.plotly_chart(volcano_fig, use_container_width=True)
-        else:
-            # Fallback volcano plot
-            fig = px.scatter(
-                limma_data_filtered,
-                x='logFC',
-                y='neg_log10_p',
-                color='dynamic_sig',
-                hover_data=['Assay', 'P.Value'],
-                title="Volcano Plot",
-                labels={'logFC': 'Log2 Fold Change', 'neg_log10_p': '-Log10(P-value)'}
-            )
-            fig.add_hline(y=-np.log10(dynamic_p_threshold), line_dash="dash", line_color="red")
-            fig.add_vline(x=dynamic_logfc_threshold, line_dash="dash", line_color="red")
-            fig.add_vline(x=-dynamic_logfc_threshold, line_dash="dash", line_color="red")
-            st.plotly_chart(fig, use_container_width=True)
+        # Show threshold info
+        st.info(f"Using thresholds: P-value < {dynamic_p_threshold}, |logFC| > {dynamic_logfc_threshold}")
         
-        # Results table
-        st.markdown("#### 📊 Significant Proteins")
-        significant_results = limma_data_filtered[limma_data_filtered['dynamic_sig']].sort_values('P.Value')
+        # Volcano plot with dynamic thresholds
+        volcano_plot = create_volcano_plot(
+            limma_data_dynamic, 
+            analysis_name=f"({analysis_name})",
+            p_threshold=dynamic_p_threshold,
+            logfc_threshold=dynamic_logfc_threshold
+        )
+        st.plotly_chart(volcano_plot, use_container_width=True)
         
-        if not significant_results.empty:
-            display_columns = ['Assay', 'logFC', 'P.Value', 'adj.P.Val', 'UniProt']
-            if 'delta_NPX' in significant_results.columns:
-                display_columns.append('delta_NPX')
-                
+        # All proteins table (ordered by logFC, with significant ones highlighted)
+        st.markdown("#### 📋 All Proteins (Ordered by LogFC)")
+        
+        # Sort by logFC descending, using dynamic data
+        limma_data_sorted = limma_data_dynamic.sort_values(['logFC'], ascending=False)
+        
+        # Create a color-coded display using dynamic significance
+        def highlight_significant(row):
+            if row['sig'] == 'Significant':
+                return ['background-color: #ffeb3b; font-weight: bold'] * len(row)
+            else:
+                return [''] * len(row)
+        
+        display_cols = ['Assay', 'logFC', 'P.Value', 'adj.P.Val', 'sig', 'neg_log10_p']
+        available_display_cols = [col for col in display_cols if col in limma_data_sorted.columns]
+        
+        styled_df = limma_data_sorted[available_display_cols].style.apply(highlight_significant, axis=1)
+        st.dataframe(styled_df, use_container_width=True, height=500)
+        
+        # Download all results (with dynamic significance)
+        csv_all = limma_data_sorted.to_csv(index=False)
+        st.download_button(
+            "📥 Download All Results",
+            data=csv_all,
+            file_name=f"all_proteins_{analysis_name.lower().replace(' ', '_')}_p{dynamic_p_threshold}_lfc{dynamic_logfc_threshold}.csv",
+            mime="text/csv"
+        )
+        
+        # Top significant proteins table (using dynamic thresholds)
+        if significant > 0:
+            st.markdown("#### 🎯 Top Significant Proteins")
+            sig_proteins = limma_data_dynamic[limma_data_dynamic['sig'] == 'Significant'].sort_values('P.Value')
+            display_cols = ['Assay', 'logFC', 'P.Value', 'adj.P.Val', 'neg_log10_p']
             st.dataframe(
-                significant_results[display_columns].head(50),
-                use_container_width=True
+                sig_proteins[display_cols].head(20),
+                use_container_width=True,
+                height=400
             )
             
-            # Download button
-            csv = significant_results.to_csv(index=False)
+            # Download button for significant proteins
+            csv = sig_proteins.to_csv(index=False)
             st.download_button(
-                label="📥 Download Significant Results (CSV)",
+                "📥 Download Significant Proteins",
                 data=csv,
-                file_name=f"significant_proteins_{analysis_name.lower().replace(' ', '_')}.csv",
-                mime='text/csv'
+                file_name=f"significant_proteins_{analysis_name.lower().replace(' ', '_')}_p{dynamic_p_threshold}_lfc{dynamic_logfc_threshold}.csv",
+                mime="text/csv"
             )
         else:
-            st.info("No proteins meet the current significance criteria.")
+            st.info(f"No proteins meet the current significance criteria (P < {dynamic_p_threshold}, |logFC| > {dynamic_logfc_threshold})")
     
     def display_enrichment_results(self, analysis_name, analysis_key):
-        """Display enrichment analysis results"""
-        st.markdown(f"### 🧬 Pathway Enrichment Results - {analysis_name}")
+        """Display enrichment analysis results matching app.py"""
+        st.markdown(f"### 🎯 Pathway Enrichment Results - {analysis_name}")
+        
+        # Load enrichment data for all ontologies
+        enrichment_data = {}
+        ontologies = ['bp', 'mf', 'cc', 'kegg', 'reactome']
+        
+        for ont in ontologies:
+            data = self.load_enrichment_results(analysis_key, ont)
+            if data is not None and not data.empty:
+                enrichment_data[ont] = data
+        
+        if not enrichment_data:
+            st.warning("No enrichment results available")
+            return
         
         # Create tabs for different ontologies
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "GO: Biological Process", 
-            "GO: Molecular Function", 
-            "GO: Cellular Component",
-            "KEGG Pathways",
-            "REACTOME Pathways"
-        ])
+        available_ontologies = []
+        if 'bp' in enrichment_data and not enrichment_data['bp'].empty:
+            available_ontologies.append("Biological Process")
+        if 'mf' in enrichment_data and not enrichment_data['mf'].empty:
+            available_ontologies.append("Molecular Function")
+        if 'cc' in enrichment_data and not enrichment_data['cc'].empty:
+            available_ontologies.append("Cellular Component")
+        if 'kegg' in enrichment_data and not enrichment_data['kegg'].empty:
+            available_ontologies.append("KEGG Pathways")
+        if 'reactome' in enrichment_data and not enrichment_data['reactome'].empty:
+            available_ontologies.append("REACTOME Pathways")
         
-        ontologies = {
-            "GO: Biological Process": ("bp", tab1),
-            "GO: Molecular Function": ("mf", tab2), 
-            "GO: Cellular Component": ("cc", tab3),
-            "KEGG Pathways": ("kegg", tab4),
-            "REACTOME Pathways": ("reactome", tab5)
-        }
+        if not available_ontologies:
+            st.info("No significant enrichment terms found")
+            return
         
-        for ont_name, (ont_key, tab) in ontologies.items():
-            with tab:
-                enrichment_data = self.load_enrichment_results(analysis_key, ont_key)
+        tabs = st.tabs(available_ontologies)
+        
+        for i, ont_name in enumerate(available_ontologies):
+            with tabs[i]:
+                # Map ontology names to keys
+                ont_key_map = {
+                    "Biological Process": "bp",
+                    "Molecular Function": "mf", 
+                    "Cellular Component": "cc",
+                    "KEGG Pathways": "kegg",
+                    "REACTOME Pathways": "reactome"
+                }
+                ont_key = ont_key_map[ont_name]
                 
-                if enrichment_data is not None and not enrichment_data.empty:
-                    st.markdown(f"#### {ont_name} Results")
+                if ont_key in enrichment_data:
+                    ont_data = enrichment_data[ont_key]
                     
-                    # Display summary
-                    st.metric("Enriched Terms", len(enrichment_data))
+                    # Summary metrics
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Enriched Terms", len(ont_data))
+                    with col2:
+                        if 'NES' in ont_data.columns:
+                            avg_nes = ont_data['NES'].mean()
+                            st.metric("Avg NES", f"{avg_nes:.2f}")
+                    with col3:
+                        if 'p.adjust' in ont_data.columns:
+                            min_padj = ont_data['p.adjust'].min()
+                            st.metric("Min Adj P-val", f"{min_padj:.2e}")
                     
-                    # Bar plot of top terms
-                    if len(enrichment_data) > 0:
-                        top_terms = enrichment_data.head(15)
-                        
-                        fig = px.bar(
-                            top_terms,
-                            x='NES' if 'NES' in top_terms.columns else 'enrichmentScore',
-                            y='Description',
-                            orientation='h',
-                            title=f"Top {ont_name} Terms",
-                            labels={'x': 'Enrichment Score', 'y': 'Pathway/Term'},
-                            color='pvalue' if 'pvalue' in top_terms.columns else None,
-                            color_continuous_scale='Viridis_r'
+                    # Enrichment dot plot
+                    if 'create_enrichment_dotplot' in globals():
+                        enrich_plot = create_enrichment_dotplot(
+                            ont_data, f"- {ont_name} ({analysis_name})"
                         )
-                        fig.update_layout(height=500)
-                        st.plotly_chart(fig, use_container_width=True)
+                        if enrich_plot:
+                            st.plotly_chart(enrich_plot, use_container_width=True)
                     
                     # Results table
-                    display_columns = ['Description', 'setSize', 'enrichmentScore']
-                    if 'NES' in enrichment_data.columns:
-                        display_columns.append('NES')
-                    if 'pvalue' in enrichment_data.columns:
-                        display_columns.extend(['pvalue', 'p.adjust'])
+                    st.markdown(f"#### 📋 {ont_name} Terms")
+                    
+                    # Define display columns based on database type
+                    if ont_key in ['bp', 'mf', 'cc']:
+                        # GO terms columns
+                        display_cols = ['Description', 'NES', 'pvalue', 'p.adjust', 'setSize']
+                    elif ont_key == 'kegg':
+                        # KEGG pathways columns
+                        display_cols = ['Description', 'NES', 'pvalue', 'p.adjust', 'setSize']
+                    elif ont_key == 'reactome':
+                        # REACTOME pathways columns  
+                        display_cols = ['Description', 'NES', 'pvalue', 'p.adjust', 'setSize']
+                    else:
+                        # Default columns
+                        display_cols = ['Description', 'NES', 'pvalue', 'p.adjust', 'setSize']
+                    
+                    available_cols = [col for col in display_cols if col in ont_data.columns]
+                    
+                    # Show all available columns if none of the expected ones are found
+                    if not available_cols:
+                        available_cols = list(ont_data.columns)[:6]  # Show first 6 columns
+                        st.info(f"Showing available columns for {ont_name}: {available_cols}")
                     
                     st.dataframe(
-                        enrichment_data[display_columns].head(20),
-                        use_container_width=True
+                        ont_data[available_cols].head(20),
+                        use_container_width=True,
+                        height=400
                     )
                     
                     # Download button
-                    csv = enrichment_data.to_csv(index=False)
+                    csv = ont_data.to_csv(index=False)
                     st.download_button(
-                        label=f"📥 Download {ont_name} Results",
+                        f"📥 Download {ont_name} Results",
                         data=csv,
-                        file_name=f"{ont_key}_enrichment_{analysis_key}.csv",
-                        mime='text/csv',
-                        key=f"download_{ont_key}_{analysis_key}"
+                        file_name=f"enrichment_{ont_key}_{analysis_name.lower().replace(' ', '_')}.csv",
+                        mime="text/csv",
+                        key=f"download_{ont_key}_{analysis_name}"
                     )
-                else:
-                    st.info(f"No {ont_name.lower()} enrichment results available.")
     
     def run(self):
         """Main app interface"""
