@@ -44,10 +44,68 @@ try:
         if data.empty:
             return None
         try:
+            # Try the original plot generator first
             return plot_generator.create_enrichment_dotplot(data, title_suffix, max_terms)
         except Exception as e:
-            print(f"Error creating enrichment plot: {e}")
-            return None
+            print(f"Error creating enrichment plot with original function: {e}")
+            # Fall back to inline implementation
+            try:
+                import plotly.graph_objects as go
+                import numpy as np
+                
+                # Sort by NES and take top terms
+                df_plot = data.sort_values('NES', ascending=True).tail(max_terms)
+                df_plot = df_plot.dropna(subset=['NES', 'p.adjust', 'setSize'])
+                
+                if df_plot.empty:
+                    return None
+                
+                fig = go.Figure()
+                
+                # Simple dot plot without complex colorbar
+                p_adjust_vals = df_plot['p.adjust'].clip(lower=1e-10)
+                color_vals = [-np.log10(p) for p in p_adjust_vals]
+                
+                fig.add_trace(go.Scatter(
+                    x=df_plot['NES'],
+                    y=list(range(len(df_plot))),
+                    mode='markers',
+                    marker=dict(
+                        size=[max(8, min(20, np.sqrt(s) * 2)) for s in df_plot['setSize']],
+                        color=color_vals,
+                        colorscale='Viridis',
+                        line=dict(width=1, color='white')
+                    ),
+                    text=df_plot['Description'],
+                    customdata=df_plot[['p.adjust', 'setSize', 'NES']].values,
+                    hovertemplate='<b>%{text}</b><br>' +
+                                 'NES: %{customdata[2]:.3f}<br>' +
+                                 'Set Size: %{customdata[1]}<br>' +
+                                 'Adj p-value: %{customdata[0]:.2e}<extra></extra>',
+                    showlegend=False
+                ))
+                
+                # Update layout
+                fig.update_layout(
+                    title=f"Gene Set Enrichment Analysis {title_suffix}",
+                    xaxis_title="Normalized Enrichment Score (NES)",
+                    yaxis=dict(
+                        tickmode='array',
+                        tickvals=list(range(len(df_plot))),
+                        ticktext=[desc[:60] + '...' if len(desc) > 60 else desc 
+                                 for desc in df_plot['Description']]
+                    ),
+                    template="plotly_white",
+                    height=max(400, len(df_plot) * 30),
+                    width=1000,
+                    margin=dict(l=300)
+                )
+                
+                return fig
+                
+            except Exception as e2:
+                print(f"Fallback enrichment plot also failed: {e2}")
+                return None
         
 except ImportError:
     # Fallback: define the functions inline if import fails
@@ -176,6 +234,7 @@ except ImportError:
             p_adjust_vals = df_plot['p.adjust'].clip(lower=1e-10)  # Prevent log(0)
             color_vals = [-np.log10(p) for p in p_adjust_vals]
             
+            # First try with colorbar
             fig.add_trace(go.Scatter(
                 x=df_plot['NES'],
                 y=list(range(len(df_plot))),
@@ -186,8 +245,9 @@ except ImportError:
                     colorscale='Viridis',
                     showscale=True,
                     colorbar=dict(
-                        title=dict(text="-log10(adj p-value)", side="right"),
-                        x=1.02
+                        title="-log10(adj p-value)",
+                        x=1.02,
+                        len=0.8
                     ),
                     line=dict(width=1, color='white')
                 ),
@@ -201,24 +261,46 @@ except ImportError:
             ))
         except Exception as e:
             print(f"Colorbar plot failed: {e}")
-            # Fallback to simpler plot if colorbar fails
-            fig.add_trace(go.Scatter(
-                x=df_plot['NES'],
-                y=list(range(len(df_plot))),
-                mode='markers',
-                marker=dict(
-                    size=[max(8, min(20, np.sqrt(s) * 2)) for s in df_plot['setSize']],
-                    color='blue',
-                    line=dict(width=1, color='white')
-                ),
-                text=df_plot['Description'],
-                customdata=df_plot[['p.adjust', 'setSize', 'NES']].values,
-                hovertemplate='<b>%{text}</b><br>' +
-                             'NES: %{customdata[2]:.3f}<br>' +
-                             'Set Size: %{customdata[1]}<br>' +
-                             'Adj p-value: %{customdata[0]:.2e}<extra></extra>',
-                showlegend=False
-            ))
+            try:
+                # Try with simpler colorbar
+                fig.add_trace(go.Scatter(
+                    x=df_plot['NES'],
+                    y=list(range(len(df_plot))),
+                    mode='markers',
+                    marker=dict(
+                        size=[max(8, min(20, np.sqrt(s) * 2)) for s in df_plot['setSize']],
+                        color=color_vals,
+                        colorscale='Viridis',
+                        line=dict(width=1, color='white')
+                    ),
+                    text=df_plot['Description'],
+                    customdata=df_plot[['p.adjust', 'setSize', 'NES']].values,
+                    hovertemplate='<b>%{text}</b><br>' +
+                                 'NES: %{customdata[2]:.3f}<br>' +
+                                 'Set Size: %{customdata[1]}<br>' +
+                                 'Adj p-value: %{customdata[0]:.2e}<extra></extra>',
+                    showlegend=False
+                ))
+            except Exception as e2:
+                print(f"Simpler colorbar also failed: {e2}")
+                # Final fallback to solid color
+                fig.add_trace(go.Scatter(
+                    x=df_plot['NES'],
+                    y=list(range(len(df_plot))),
+                    mode='markers',
+                    marker=dict(
+                        size=[max(8, min(20, np.sqrt(s) * 2)) for s in df_plot['setSize']],
+                        color='blue',
+                        line=dict(width=1, color='white')
+                    ),
+                    text=df_plot['Description'],
+                    customdata=df_plot[['p.adjust', 'setSize', 'NES']].values,
+                    hovertemplate='<b>%{text}</b><br>' +
+                                 'NES: %{customdata[2]:.3f}<br>' +
+                                 'Set Size: %{customdata[1]}<br>' +
+                                 'Adj p-value: %{customdata[0]:.2e}<extra></extra>',
+                    showlegend=False
+                ))
         
         # Update layout
         fig.update_layout(
